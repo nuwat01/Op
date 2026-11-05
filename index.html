@@ -1,0 +1,171 @@
+<!doctype html><html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Crypto Strategy Lab</title>
+<style>
+:root{--bg:#0b0f17;--c:#151c2a;--t:#e8edf5;--m:#8b97ab;--g:#2ecc8f;--r:#ff5d6c;--a:#f0b90b;--l:#263146;color-scheme:dark}
+@media(prefers-color-scheme:light){:root{--bg:#f3f5f9;--c:#fff;--t:#111827;--m:#5b6678;--l:#dde3ee;color-scheme:light}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--t);font:15px/1.5 -apple-system,system-ui,sans-serif;padding:env(safe-area-inset-top) 12px calc(40px + env(safe-area-inset-bottom))}
+h1{font-size:20px;margin:14px 0 2px}h2{font-size:16px;margin:18px 0 8px}small,.m{color:var(--m)}
+.card{background:var(--c);border:1px solid var(--l);border-radius:14px;padding:14px;margin:10px 0}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}label{font-size:12px;color:var(--m);display:block}
+input,select{width:100%;padding:10px;border-radius:10px;border:1px solid var(--l);background:var(--bg);color:var(--t);font-size:16px}
+button{padding:11px 14px;border-radius:10px;border:0;background:var(--a);color:#111;font-weight:700;font-size:15px;margin:4px 4px 0 0}
+button.s{background:var(--l);color:var(--t)}.tabs{display:flex;gap:6px;overflow:auto;margin:8px 0}.tabs button{background:var(--l);color:var(--t)}.tabs button.on{background:var(--a);color:#111}
+.w{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:12.5px;white-space:nowrap}th,td{padding:6px 8px;border-bottom:1px solid var(--l);text-align:right}th:first-child,td:first-child{text-align:left}
+.g{color:var(--g)}.r{color:var(--r)}.b{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:700}.bg{background:#2ecc8f33;color:var(--g)}.br{background:#ff5d6c33;color:var(--r)}
+canvas{width:100%;height:200px;display:block}.hide{display:none}#msg{color:var(--a)}pre{white-space:pre-wrap;font-size:12px}
+</style></head><body>
+<h1>SOL Trading Strategy Lab</h1><small>Binance Spot · SOLUSDT · Backtest เท่านั้น ไม่ส่งคำสั่งซื้อขายจริง ไม่ใช้ API Key</small>
+<div class="tabs" id="tabs"></div>
+<section id="p0"><div class="card"><div class="grid">
+<div><label>เงินทุนเริ่มต้น (USDT)</label><input id="cap" type="number" value="10"></div>
+<div><label>เงินต่อออเดอร์ (USDT)</label><input id="sz" type="number" value="5"></div>
+<div><label>คู่เทรด</label><input id="sym" value="SOLUSDT" autocapitalize="characters" autocorrect="off" spellcheck="false"></div>
+<div><label>Timeframe</label><select id="tf"><option>15m</option><option selected>1h</option><option>4h</option></select></div>
+<div><label>ย้อนหลัง</label><select id="days"><option value="90">90 วัน</option><option value="180">180 วัน</option><option value="365" selected>365 วัน</option><option value="730">2 ปี</option><option value="1095">3 ปี</option></select></div>
+<div><label>Fee ต่อด้าน (%)</label><input id="fee" type="number" step="0.01" value="0.10"></div>
+<div><label>Slippage ต่อด้าน (%)</label><input id="slp" type="number" step="0.01" value="0.05"></div></div>
+<button id="go">Start Backtest</button><button class="s" id="cmp">Compare Strategies</button><button class="s" id="rst">Reset</button>
+<p id="msg"></p><small id="src"></small></div></section>
+<section id="p1" class="hide"><div id="res"></div></section>
+<section id="p2" class="hide"><div class="card"><select id="tsel"></select><button class="s" id="csv">Export CSV</button><button class="s" id="plog">Export พารามิเตอร์ทั้งหมด</button><button class="s" id="dl">Download ผล (JSON)</button><div class="w" id="th"></div></div></section>
+<section id="p3" class="hide"><div class="card" id="guide"></div></section>
+<script>
+const $=s=>document.querySelector(s);let D=null,R=null;
+['เริ่มต้น','ผลลัพธ์','Trade History','คู่มือ'].forEach((t,i)=>{const b=document.createElement('button');b.textContent=t;b.onclick=()=>tab(i);$('#tabs').append(b)});
+function tab(i){[0,1,2,3].forEach(j=>{$('#p'+j).classList.toggle('hide',j!=i);$('#tabs').children[j].classList.toggle('on',j==i)})}tab(0);
+const f2=(x,d=2)=>isFinite(x)?x.toFixed(d):'-',cl=x=>x>0?'g':x<0?'r':'';
+// ---------- indicators ----------
+const ema=(a,n)=>{const k=2/(n+1);let p=a[0];return a.map((x,i)=>p=i?x*k+p*(1-k):x)};
+const sma=(a,n)=>{let s=0;return a.map((x,i)=>{s+=x;if(i>=n)s-=a[i-n];return i>=n-1?s/n:NaN})};
+const sdv=(a,n)=>a.map((_,i)=>{if(i<n-1)return NaN;let m=0;for(let j=i-n+1;j<=i;j++)m+=a[j];m/=n;let v=0;for(let j=i-n+1;j<=i;j++)v+=(a[j]-m)**2;return Math.sqrt(v/n)});
+const rma=(a,n)=>{let p=NaN;return a.map((x,i)=>{if(i<n-1)return NaN;if(i==n-1){let s=0;for(let j=0;j<n;j++)s+=a[j];return p=s/n}return p=(p*(n-1)+x)/n})};
+function rsi(c,n=14){const u=[0],d=[0];for(let i=1;i<c.length;i++){const x=c[i]-c[i-1];u.push(Math.max(x,0));d.push(Math.max(-x,0))}const a=rma(u,n),b=rma(d,n);return a.map((x,i)=>b[i]==0?100:100-100/(1+x/b[i]))}
+function atrF(h,l,c,n=14){return rma(h.map((x,i)=>i?Math.max(x-l[i],Math.abs(x-c[i-1]),Math.abs(l[i]-c[i-1])):x-l[i]),n)}
+function adxF(h,l,c,n=14){const p=[0],m=[0];for(let i=1;i<h.length;i++){const u=h[i]-h[i-1],d=l[i-1]-l[i];p.push(u>d&&u>0?u:0);m.push(d>u&&d>0?d:0)}const at=atrF(h,l,c,n),P=rma(p,n),M=rma(m,n);const dx=P.map((x,i)=>{const a=100*x/at[i],b=100*M[i]/at[i];return isNaN(a)?0:100*Math.abs(a-b)/((a+b)||1)});return rma(dx,n)}
+function supert(h,l,c,at,m){const n=c.length,dir=Array(n).fill(1);let fu=NaN,fl=NaN;for(let i=0;i<n;i++){if(isNaN(at[i]))continue;const md=(h[i]+l[i])/2,bu=md+m*at[i],bl=md-m*at[i],pu=fu,pl=fl,pc=c[i-1];fu=(isNaN(pu)||bu<pu||pc>pu)?bu:pu;fl=(isNaN(pl)||bl>pl||pc<pl)?bl:pl;if(i>0){dir[i]=dir[i-1];if(dir[i-1]==-1&&c[i]>pu)dir[i]=1;else if(dir[i-1]==1&&c[i]<pl)dir[i]=-1}}return dir}
+// ---------- data ----------
+const MS={'15m':9e5,'1h':36e5,'4h':144e5},BPH={'15m':4,'1h':1,'4h':.25},LOG=[];
+const EP=['https://data-api.binance.vision','https://api.binance.com','https://api1.binance.com'];
+async function load(sym,tf,days){let err,base;const errs=[];for(const e of EP){try{const r=await fetch(e+'/api/v3/klines?symbol='+sym+'&interval='+tf+'&limit=1',{cache:'no-store'});if(r.ok){base=e;break}if(r.status==400)throw new Error('ไม่พบคู่เทรด '+sym+' บน Binance Spot');err=r.status;errs.push(e.replace('https://','')+' → HTTP '+r.status)}catch(x){if(x.message.startsWith('ไม่พบ'))throw x;err=x.message;errs.push(e.replace('https://','')+' → '+x.message)}}
+if(!base)throw new Error('เชื่อมต่อ Binance ไม่ได้\n'+errs.join('\n')+'\nหน้านี้เปิดจาก: '+location.protocol+'//'+(location.host||'(ไฟล์ในเครื่อง)')+'\nต้องเปิดผ่านลิงก์ https ที่ deploy แล้ว (เช่น Netlify) ไม่ใช่จากแชทหรือแอป Files');
+let t=Date.now()-days*864e5,rows=[];const now=Date.now();
+while(t<now){const r=await fetch(`${base}/api/v3/klines?symbol=${sym}&interval=${tf}&startTime=${t}&limit=1000`);if(!r.ok)throw new Error('Binance HTTP '+r.status);const j=await r.json();if(!j.length)break;rows.push(...j);t=j[j.length-1][6]+1;$('#msg').textContent='ดึงข้อมูล '+rows.length+' แท่ง...';if(j.length<1000)break}
+rows=rows.filter(x=>x[6]<Date.now());// เฉพาะแท่งที่ปิดแล้ว
+const d={t:rows.map(x=>x[0]),o:rows.map(x=>+x[1]),h:rows.map(x=>+x[2]),l:rows.map(x=>+x[3]),c:rows.map(x=>+x[4]),v:rows.map(x=>+x[5]),src:base,at:new Date()};
+d.gaps=0;d.bad=0;for(let i=0;i<d.t.length;i++){if(i&&d.t[i]-d.t[i-1]!==MS[tf])d.gaps++;if(!(d.h[i]>=d.l[i]&&d.o[i]<=d.h[i]&&d.o[i]>=d.l[i]&&d.c[i]<=d.h[i]&&d.c[i]>=d.l[i]&&d.v[i]>=0))d.bad++}
+if(d.t.length<600)throw new Error('ข้อมูลน้อยเกินไป ('+d.t.length+' แท่ง)');return d}
+// ---------- signals ----------
+function mk(d,ex){const{o,h,l,c,v}=d,N=c.length,I={e20:ema(c,20),e50:ema(c,50),e200:ema(c,200),rsi:rsi(c),adx:adxF(h,l,c),atr:atrF(h,l,c),vs:sma(v,20),mid:sma(c,20),sd:sdv(c,20)};
+const mf=ema(c,12),ms=ema(c,26),mac=mf.map((x,i)=>x-ms[i]),sg=ema(mac,9);I.hist=mac.map((x,i)=>x-sg[i]);I.st=supert(h,l,c,atrF(h,l,c,10),3);
+const R=(f)=>{const s=Array(N).fill(false);for(let i=201;i<N;i++)s[i]=!!f(i);return s};
+const L=[
+{k:'A',n:'Trend Pullback',pn:'ADX≥',g:[15,20,25],f:p=>R(i=>I.e50[i]>I.e200[i]&&c[i]>I.e200[i]&&c[i]>I.e20[i]&&c[i-1]<=I.e20[i-1]&&I.adx[i]>=p&&I.rsi[i]>45&&I.rsi[i]<70)},
+{k:'B',n:'RSI Mean Reversion',pn:'RSI<',g:[25,30,35,40],f:p=>R(i=>I.rsi[i-1]<p&&I.rsi[i]>I.rsi[i-1]&&c[i-1]<=I.mid[i-1]-1.5*I.sd[i-1]*1.0+I.sd[i-1]*0.0&&c[i]>o[i]&&I.adx[i]<25)},
+{k:'C',n:'Bollinger Reversal',pn:'BB σ',g:[1.5,2,2.5],f:p=>R(i=>c[i-1]<I.mid[i-1]-p*I.sd[i-1]&&c[i]>I.mid[i]-p*I.sd[i]&&I.rsi[i]>I.rsi[i-1]&&v[i]>I.vs[i])},
+{k:'D',n:'Supertrend',pn:'RSI>',g:[45,50,55],f:p=>R(i=>I.st[i]==1&&I.st[i-1]==-1&&c[i]>I.e200[i]&&I.rsi[i]>p)},
+{k:'E',n:'MACD Momentum',pn:'Vol×',g:[0.8,1,1.3],f:p=>R(i=>I.hist[i]>0&&I.hist[i-1]<=0&&I.e50[i]>I.e200[i]&&c[i]>I.e50[i]&&v[i]>I.vs[i]*p)},
+{k:'F',n:'Donchian Breakout',pn:'ช่อง',g:[20,40,55],f:p=>R(i=>{if(i<p)return 0;let m=0;for(let j=i-p;j<i;j++)m=Math.max(m,h[j]);return c[i]>m&&c[i]>I.e200[i]&&v[i]>I.vs[i]*1.2})}
+];L.push(...more(d,I,ex||{}));return L.map(s=>({...s,I}))}
+
+function pivs(h,l,k){const N=h.length,SH=Array(N).fill(NaN),SL=SH.slice(),SHi=Array(N).fill(-1),SLi=SHi.slice();let a=NaN,ai=-1,b=NaN,bi=-1;for(let i=0;i<N;i++){const j=i-k;if(j>=k){let mh=true,ml=true;for(let q=j-k;q<=i;q++){if(h[q]>h[j])mh=false;if(l[q]<l[j])ml=false}if(mh){a=h[j];ai=j}if(ml){b=l[j];bi=j}}SH[i]=a;SHi[i]=ai;SL[i]=b;SLi[i]=bi}return{SH,SL,SHi,SLi}}
+function prof(h,l,v,a,b){let lo=1e18,hi=-1e18;for(let q=a;q<=b;q++){lo=Math.min(lo,l[q]);hi=Math.max(hi,h[q])}const nb=40,bs=(hi-lo)/nb||1e-9,bn=Array(nb).fill(0);for(let q=a;q<=b;q++){const b0=Math.min(nb-1,Math.floor((l[q]-lo)/bs)),b1=Math.min(nb-1,Math.floor((h[q]-lo)/bs));for(let k=b0;k<=b1;k++)bn[k]+=v[q]/(b1-b0+1)}
+let p=0;bn.forEach((x,k)=>{if(x>bn[p])p=k});const tot=bn.reduce((x,y)=>x+y,0),mean=tot/nb;let s=bn[p],x=p,y=p;while(s<.7*tot){const u=y+1<nb?bn[y+1]:-1,d=x-1>=0?bn[x-1]:-1;if(u<0&&d<0)break;if(u>=d){y++;s+=bn[y]}else{x--;s+=bn[x]}}
+const px=k=>lo+k*bs,hvn=[],lvn=[];for(let k=1;k<nb-1;k++){if(bn[k]>bn[k-1]&&bn[k]>=bn[k+1]&&bn[k]>1.3*mean)hvn.push(px(k+.5));if(bn[k]<bn[k-1]&&bn[k]<=bn[k+1]&&bn[k]<.6*mean)lvn.push(px(k+.5))}
+return{poc:px(p+.5),vah:px(y+1),val:px(x),hvn,lvn}}
+function vpS(d,W){const N=d.c.length,poc=Array(N).fill(NaN),vah=poc.slice(),val=poc.slice(),st=Math.max(1,Math.round(W/24));let cur=null;for(let i=W;i<N;i++){if(!cur||(i-W)%st==0)cur=prof(d.h,d.l,d.v,i-W+1,i);poc[i]=cur.poc;vah[i]=cur.vah;val[i]=cur.val}return{poc,vah,val}}
+function more(d,I,ex){const{o,h,l,c,v}=d,N=c.length,Rr=f=>{const s=Array(N).fill(false);for(let i=201;i<N;i++)s[i]=!!f(i);return s};const pc={},vc={},W=hr=>Math.max(6,Math.round(hr*BPH[d.tf||'1h']));
+const PV=k=>pc[k]||(pc[k]=pivs(h,l,k)),VP=hr=>vc[hr]||(vc[hr]=vpS(d,W(hr)));
+const inFib=(i,q)=>{if(!(q.SHi[i]>=0&&q.SLi[i]>=0&&q.SLi[i]<q.SHi[i]))return false;const a=q.SH[i],r=a-q.SL[i];if(r<2*I.atr[i])return false;return l[i]<=a-.5*r&&c[i]>a-.618*r&&c[i]<a};
+return[
+{k:'G',n:'EMA+RSI+ADX',pn:'RSI ตัดขึ้น',g:[40,45,50],f:p=>Rr(i=>c[i]>I.e200[i]&&I.e20[i]>I.e50[i]&&I.rsi[i-1]<p&&I.rsi[i]>=p&&I.adx[i]>=20)},
+{k:'H',n:'EMA+RSI Pullback+Vol',pn:'RSI<',g:[35,40,45],f:p=>Rr(i=>c[i]>I.e200[i]&&I.rsi[i-1]<p&&I.rsi[i]>I.rsi[i-1]&&v[i]>I.vs[i]&&c[i]<I.e20[i]*1.03)},
+{k:'I',n:'Supertrend+ADX+Vol',pn:'ADX≥',g:[15,20,25],f:p=>Rr(i=>I.st[i]==1&&I.st[i-1]==-1&&I.adx[i]>=p&&v[i]>I.vs[i])},
+{k:'J',n:'BTC Filter+SOL Entry',pn:'ADX≥',g:[15,20,25],f:p=>Rr(i=>ex.bull&&ex.bull[i]&&I.e50[i]>I.e200[i]&&c[i]>I.e200[i]&&c[i]>I.e20[i]&&c[i-1]<=I.e20[i-1]&&I.adx[i]>=p&&I.rsi[i]>45&&I.rsi[i]<70)},
+{k:'K',n:'EMA Trend+ATR Risk',pn:'Trail×ATR',g:[0,2,3],f:p=>Rr(i=>c[i]>I.e20[i]&&I.e20[i]>I.e50[i]&&I.e50[i]>I.e200[i]&&c[i-1]<=I.e20[i-1]*1.002&&I.rsi[i]>45)},
+{k:'L',n:'EMA200+Fib+RSI',pn:'Pivot k',g:[3,5,8],f:p=>{const q=PV(p);return Rr(i=>c[i]>I.e200[i]&&inFib(i,q)&&c[i]>o[i]&&I.rsi[i]<60)}},
+{k:'M',n:'EMA200+POC/VAL+Vol',pn:'VP ชม.',g:[24,72,168,336],f:p=>{const q=VP(p);return Rr(i=>c[i]>I.e200[i]&&l[i]<=q.val[i]*1.002&&c[i]>q.val[i]&&c[i]>o[i]&&v[i]>I.vs[i])}},
+{k:'N',n:'EMA200+Fib+POC/VAL',pn:'VP ชม.',g:[24,72,168,336],f:p=>{const q=VP(p),f=PV(5);return Rr(i=>c[i]>I.e200[i]&&inFib(i,f)&&(l[i]<=q.val[i]*1.002||Math.abs(c[i]-q.poc[i])/c[i]<.01)&&c[i]>o[i])}},
+{k:'O',n:'Confluence ทั้งหมด',pn:'VP ชม.',g:[24,72,168,336],f:p=>{const q=VP(p),f=PV(5);return Rr(i=>c[i]>I.e200[i]&&inFib(i,f)&&(l[i]<=q.val[i]*1.002||Math.abs(c[i]-q.poc[i])/c[i]<.01)&&c[i]>o[i]&&I.rsi[i]<55&&I.adx[i]>=15&&v[i]>I.vs[i])}}]}
+// ---------- simulator (spot long-only, 1 position) ----------
+function sim(d,I,sig,a,b,P){const{o,h,l,c}=d,{sl,tp,hold,fee,slp,size}=P,T=[];let i=a;
+while(i<b-1){if(!sig[i]||isNaN(I.atr[i])){i++;continue}
+const raw=o[i+1],en=raw*(1+slp),q=size/en*(1-fee),TP=raw+tp*I.atr[i];let S=raw-sl*I.atr[i],hi=raw,j=i+1,px,why;
+for(;j<b;j++){if(j>i+1&&o[j]<=S){px=o[j];why='SL gap';break}if(l[j]<=S){px=S;why='SL';break}if(j>i+1&&o[j]>=TP){px=o[j];why='TP gap';break}if(h[j]>=TP){px=TP;why='TP';break}if(P.trail){hi=Math.max(hi,h[j]);S=Math.max(S,hi-P.trail*I.atr[i])}if(j-i>=hold){px=c[j];why='Time';break}}
+if(j>=b){j=b-1;px=c[j];why='End'}
+const ex=px*(1-slp),pnl=q*ex*(1-fee)-size;T.push({ei:i+1,xi:j,entry:en,exit:ex,pnl,pct:pnl/size*100,why});i=j}
+return T}
+function M(t,cap){let w=0,l=0,nw=0,nl=0,st=0,ms=0,eq=cap,pk=cap,dd=0;const e=[cap],dc=[0];for(const x of t){if(x.pnl>0){w+=x.pnl;nw++;st=0}else{l-=x.pnl;nl++;ms=Math.max(ms,++st)}eq+=x.pnl;e.push(eq);pk=Math.max(pk,eq);const q=(pk-eq)/cap*100;dc.push(q);dd=Math.max(dd,q)}
+const n=t.length,net=w-l;return{n,wr:n?nw/n*100:0,pf:l?w/l:(w?99:0),net,roi:net/cap*100,dd,exp:n?net/n:0,aw:nw?w/nw:0,al:nl?-l/nl:0,ms,e,dc}}
+// ---------- optimize ----------
+const wait=()=>new Promise(r=>setTimeout(r,0));
+async function run(){const cap=+$('#cap').value,size=Math.min(+$('#sz').value,cap),fee=+$('#fee').value/100,slp=+$('#slp').value/100;
+if(!(cap>0&&size>0))throw new Error('ใส่เงินทุนให้ถูกต้อง');
+const SYM=($('#sym').value||'').trim().toUpperCase();if(!/^[A-Z0-9]{5,20}$/.test(SYM))throw new Error('ชื่อคู่เทรดไม่ถูกต้อง เช่น BTCUSDT');
+const tf=$('#tf').value,days=+$('#days').value;D=await load(SYM,tf,days);D.tf=tf;const EX={};
+if(SYM!=='BTCUSDT'){try{$('#msg').textContent='ดึงข้อมูล BTC...';const B=await load('BTCUSDT',tf,days),e2=ema(B.c,200),e5=ema(B.c,50),mp=new Map(B.t.map((t,i)=>[t,i]));EX.bull=D.t.map(t=>{const j=mp.get(t);return j!==undefined&&j>=200&&B.c[j]>e2[j]&&e5[j]>e2[j]})}catch(e){EX.err=e.message}}else EX.bull=D.t.map(()=>true);
+try{const r=await fetch(D.src+'/api/v3/exchangeInfo?symbol='+SYM),j=await r.json(),f=(j.symbols[0].filters||[]).find(x=>x.filterType=='NOTIONAL'||x.filterType=='MIN_NOTIONAL');EX.minN=f?+f.minNotional:null}catch(e){}
+return await opt(D,EX,{cap,size,fee,slp,SYM,tf,days})}
+async function opt(D,EX,Q){LOG.length=0;const{cap,size,fee,slp}=Q,N=D.c.length,a0=201,a=a0+Math.floor((N-a0)*.6),b=a0+Math.floor((N-a0)*.8);
+const dt=i=>new Date(D.t[i]).toISOString().slice(0,10),seg=(x,y)=>({from:dt(x),to:dt(y-1),chg:(D.c[y-1]/D.c[x]-1)*100,n:y-x});
+const out=[],base={fee,slp,size};
+for(const S of mk(D,EX)){$('#msg').textContent='ทดสอบ '+S.k+' '+S.n+'...';await wait();let best=null;
+for(const p of S.g){const sig=S.f(p);for(const sl of[1,1.5,2])for(const tp of[1,1.5,2.5])for(const hold of[20,60]){const P={...base,sl,tp,hold,trail:S.k=='K'?p:0},tr=M(sim(D,S.I,sig,a0,a,P),cap),va=M(sim(D,S.I,sig,a,b,P),cap);
+LOG.push([S.k,p,sl,tp,hold,tr.n,tr.wr.toFixed(1),tr.net.toFixed(4),va.n,va.wr.toFixed(1),va.net.toFixed(4)]);
+const ok=tr.n>=5&&va.n>=3&&tr.net>0&&va.net>0,sc=ok?va.wr+20*Math.min(va.pf,3):-1e6+va.exp*100;if(!best||sc>best.sc)best={sc,p,sig,P,tr,va}}}
+const{p,sig,P}=best,all=sim(D,S.I,sig,a0,N,P),oT=sim(D,S.I,sig,b,N,P),oos=M(oT,cap),full=M(all,cap);
+const s1=M(sim(D,S.I,sig,b,N,{...P,slp:.001}),cap),s2=M(sim(D,S.I,sig,b,N,{...P,slp:.002}),cap),hard=M(sim(D,S.I,sig,b,N,{...P,fee:fee*2,slp:slp*2}),cap);
+const fb=[];for(let q=0;q<5;q++){const x=a0+Math.floor((N-a0)*q/5),y=a0+Math.floor((N-a0)*(q+1)/5);fb.push(M(sim(D,S.I,sig,x,y,P),cap).net)}const wfPos=fb.filter(x=>x>0).length;
+const reg={Bull:[],Bear:[],Sideways:[]},I=S.I;all.forEach(x=>{const j=x.ei-1,c=D.c[j];reg[c>I.e200[j]&&I.e50[j]>I.e200[j]?'Bull':c<I.e200[j]&&I.e50[j]<I.e200[j]?'Bear':'Sideways'].push(x)});
+const rg=Object.entries(reg).map(([k,t])=>({name:k,...M(t,cap)})),chk=Math.abs(full.e[full.e.length-1]-(cap+full.net))<1e-9&&all.every(x=>isFinite(x.pnl));
+const cr=[['OOS Net>0',oos.net>0],['OOS PF>1.5',oos.pf>1.5],['OOS Expectancy>0',oos.exp>0],['OOS MaxDD≤10%',oos.dd<=10],['OOS Win Rate≥60%',oos.wr>=60],['เทรด≥100 (ทั้งช่วง)',full.n>=100],['OOS ไม่พังเทียบ Train (WR ห่าง≤15จุด และ Net>0)',oos.net>0&&Math.abs(oos.wr-best.tr.wr)<=15],['ทน Fee/Slip ×2 (Net>0)',hard.net>0],['Slip 0.10% Net>0',s1.net>0],['Fold กำไร≥3/5',wfPos>=3]];
+out.push({k:S.k,n:S.n,pn:S.pn,p,P:{sl:P.sl,tp:P.tp,hold:P.hold,trail:P.trail},tr:best.tr,va:best.va,oos,full,hard,s1,s2,fb,wfPos,rg,chk,cr,pass:cr.every(x=>x[1]),trades:all,oosT:oT,wd:wd(all,cap)})}
+const rk=x=>(x.pass?1e6:0)+x.cr.filter(c=>c[1]).length*1e3+x.oos.net*10;out.sort((x,y)=>rk(y)-rk(x));
+const Wv=Math.max(6,Math.round(168*BPH[D.tf]));
+R={sym:Q.SYM,cap,size,fee,slp,tf:Q.tf,days:Q.days,seg:{train:seg(a0,a),val:seg(a,b),oos:seg(b,N)},range:[dt(0),dt(N-1)],N,out,at:D.at.toISOString(),src:D.src,dq:{gaps:D.gaps,bad:D.bad},minN:EX.minN,btcErr:EX.err,tested:LOG.length,vp:prof(D.h,D.l,D.v,N-Wv,N-1)};return R}
+function wd(t,cap){const nm=['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัส','ศุกร์','เสาร์'],g=nm.map(()=>[]);t.forEach(x=>g[new Date(D.t[x.ei]+7*36e5).getUTCDay()].push(x));return nm.map((n,i)=>({...M(g[i],cap),name:n}))}
+// ---------- charts ----------
+function cv(h=200){const c=document.createElement('canvas');c.style.height=h+'px';return c}
+function draw(c,fn){requestAnimationFrame(()=>{const r=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;c.width=w*r;c.height=h*r;const x=c.getContext('2d');x.scale(r,r);x.font='10px sans-serif';fn(x,w,h)})}
+function lineC(c,ss,tt){draw(c,(x,w,h)=>{let lo=1e18,hi=-1e18;ss.forEach(s=>s.y.forEach(v=>{lo=Math.min(lo,v);hi=Math.max(hi,v)}));if(hi==lo)hi=lo+1;const X=(i,n)=>30+(w-36)*i/Math.max(n-1,1),Y=v=>h-14-(h-24)*(v-lo)/(hi-lo);x.fillStyle='#8b97ab';x.fillText(f2(hi),0,10);x.fillText(f2(lo),0,h-4);ss.forEach(s=>{x.strokeStyle=s.c;x.lineWidth=1.5;x.beginPath();const st=Math.max(1,Math.floor(s.y.length/500));s.y.forEach((v,i)=>{if(i%st)return;i?x.lineTo(X(i,s.y.length),Y(v)):x.moveTo(X(i,s.y.length),Y(v))});x.stroke();(s.m||[]).forEach(m=>{x.fillStyle=m.c;x.beginPath();const px=X(m.i,s.y.length),py=Y(s.y[m.i]);x.arc(px,py,2.5,0,7);x.fill()})});if(tt){x.fillStyle='#8b97ab';x.fillText(tt,34,10)}})}
+function barC(c,lab,val,fmt=f2){draw(c,(x,w,h)=>{const mx=Math.max(...val.map(Math.abs),1e-9),bw=(w-10)/val.length;x.strokeStyle='#8b97ab';x.beginPath();x.moveTo(0,h/2);x.lineTo(w,h/2);x.stroke();val.forEach((v,i)=>{x.fillStyle=v>=0?'#2ecc8f':'#ff5d6c';const bh=(h/2-18)*Math.abs(v)/mx;x.fillRect(5+i*bw+3,v>=0?h/2-bh:h/2,bw-6,bh);x.fillStyle='#8b97ab';x.textAlign='center';x.fillText(lab[i],5+i*bw+bw/2,h-3);x.fillText(fmt(v),5+i*bw+bw/2,v>=0?h/2-bh-3:h/2+bh+10)});x.textAlign='left'})}
+// ---------- render ----------
+function ren(){const r=R,w=r.out.find(x=>x.pass),best=r.out[0],T=(x,y)=>`${x.from} → ${x.to} · ราคา ${r.sym} ${f2(x.chg,1)}% (Buy&Hold ของเหรียญ ไม่ใช่ผลกลยุทธ์)`;
+const gk=k=>r.out.find(x=>x.k==k),sel=(fn,cmp)=>r.out.reduce((a,b)=>cmp(fn(b),fn(a))?b:a);
+const row=x=>`<tr><td><b>${x.k}</b> ${x.n}<br><small>${x.pn}${x.p} SL${x.P.sl}/TP${x.P.tp}×ATR · ${x.P.hold} แท่ง</small></td><td>${f2(x.oos.wr,1)}%</td><td>${f2(x.oos.pf)}</td><td class="${cl(x.oos.net)}">${f2(x.oos.net,3)}</td><td>${f2(x.oos.roi,1)}%</td><td>${f2(x.oos.dd,1)}%</td><td>${f2(x.oos.exp,3)}</td><td>${x.oos.n}/${x.full.n}</td><td>${f2(x.oos.aw,3)}/${f2(x.oos.al,3)}</td><td>${x.oos.ms}</td><td>${f2(x.tr.wr,0)}/${f2(x.va.wr,0)}%</td><td>${x.wfPos}/5</td><td>${f2(x.s1.net,2)}/${f2(x.s2.net,2)}</td><td><span class="b ${x.pass?'bg':'br'}">${x.pass?'ผ่าน':'ไม่ผ่าน'}</span></td></tr>`;
+$('#res').innerHTML=`<div class="card"><h2 style="margin-top:0">คำแนะนำ: ${w?`<span class="g">${w.k} ${w.n}</span>`:'<span class="r">WAIT / NO TRADE</span>'}</h2>${w?'ผ่านเกณฑ์ทั้งหมดบน Out-of-sample (ผลย้อนหลังไม่รับประกันอนาคต)':'ไม่พบกลยุทธ์ที่ผ่านเกณฑ์ครบทุกข้อ จึงไม่แนะนำให้เข้าเทรด (ตัวที่ดีที่สุด: '+best.k+' '+best.n+')'}
+<p><small>ข้อมูล ${r.sym} ${r.tf} ${r.range[0]} ถึง ${r.range[1]} · ${r.N} แท่งที่ปิดแล้ว · ดึงเมื่อ ${r.at} จาก ${r.src}<br>Train ${T(r.seg.train)}<br>Validation ${T(r.seg.val)}<br>Out-of-sample ${T(r.seg.oos)}<br>Fee ${r.fee*100}% · Slippage ${r.slp*100}% ต่อด้าน · ทุน ${r.cap} / ออเดอร์ ${r.size} USDT. ข้อมูลผิดปกติ: ช่องว่างเวลา ${r.dq.gaps} จุด, แท่งผิดปกติ ${r.dq.bad} · Minimum Notional ${r.minN??'ตรวจไม่ได้'} USDT${r.minN&&r.size<r.minN?' ⚠ ออเดอร์ต่ำกว่าขั้นต่ำ ส่งจริงไม่ได้':''} · ตรวจ Net/ROI/Equity ตรงกัน: ${r.out.every(x=>x.chk)?'ผ่าน':'ไม่ผ่าน'} · ทดสอบ ${r.tested} ชุดพารามิเตอร์ · Walk-forward = ตรวจความสม่ำเสมอ 5 ช่วงด้วยพารามิเตอร์ที่เลือกแล้ว (ไม่ได้ re-optimize ทุกช่วง)${r.btcErr?' · BTC โหลดไม่ได้: '+r.btcErr:''}</small></p></div>
+<div class="card"><b>สรุป</b><br>Win Rate สูงสุด (OOS): ${sel(x=>x.oos.wr,(a,b)=>a>b).n}<br>Net Profit สูงสุด: ${sel(x=>x.oos.net,(a,b)=>a>b).n}<br>Drawdown ต่ำสุด: ${sel(x=>x.oos.n?x.oos.dd:99,(a,b)=>a<b).n}<br>OOS ดีที่สุด: ${best.n}<br>เหมาะทุน 10 USDT: ${w?w.n:'ไม่มี (WAIT)'}</div>
+<div class="card"><b>ผลการเพิ่มเครื่องมือ (OOS Net, USDT)</b><br>EMA/RSI อย่างเดียว (ดีสุดของ A,G,H): ${f2(Math.max(...['A','G','H'].map(k=>gk(k).oos.net)),3)} · Fib (L): ${f2(gk('L').oos.net,3)} · Volume Profile (M): ${f2(gk('M').oos.net,3)} · VP+Fib (N): ${f2(gk('N').oos.net,3)} · ทุกตัวกรอง (O): ${f2(gk('O').oos.net,3)}<br>BTC Filter (J) เทียบ Pullback เดิม (A): ${f2(gk('J').oos.net,3)} vs ${f2(gk('A').oos.net,3)}<br>PF สูงสุด: ${sel(x=>x.oos.pf,(a,b)=>a>b).n} · Fold กำไรสม่ำเสมอสุด: ${sel(x=>x.wfPos,(a,b)=>a>b).n}<br><small>ถ้าเพิ่มเครื่องมือแล้ว OOS แย่ลง = ไม่เลือกใช้ · Volume Profile สร้างจาก OHLCV โดยกระจาย Volume เท่าๆ กันตลอดช่วง High–Low ของแท่ง (ประมาณการ ไม่ใช่ข้อมูล Trade จริง) คำนวณเฉพาะข้อมูลถึงแท่งสัญญาณ · VP 7 วันล่าสุด: POC ${f2(r.vp.poc)} VAH ${f2(r.vp.vah)} VAL ${f2(r.vp.val)} HVN ${r.vp.hvn.map(x=>f2(x,1)).join(',')||'-'} LVN ${r.vp.lvn.map(x=>f2(x,1)).join(',')||'-'}</small></div><h2>เปรียบเทียบ ${r.out.length} กลยุทธ์ (ผล Out-of-sample)</h2><div class="card w"><table><tr><th>กลยุทธ์</th><th>WR</th><th>PF</th><th>Net</th><th>ROI</th><th>MaxDD</th><th>Exp</th><th>เทรด OOS/ทั้งหมด</th><th>AvgW/L</th><th>แพ้ติด</th><th>WR Train/Val</th><th>Fold+</th><th>Net slip .10/.20</th><th>เกณฑ์</th></tr>${r.out.map(row).join('')}</table></div>
+<div class="card"><b>กราฟเปรียบเทียบ Net Profit (OOS, USDT)</b><div id="c0"></div></div>
+<div class="card"><b>เกณฑ์ที่ไม่ผ่าน</b>${r.out.map(x=>`<p><b>${x.k}</b>: ${x.cr.filter(c=>!c[1]).map(c=>c[0]).join(', ')||'ผ่านทั้งหมด'}</p>`).join('')}</div>
+<div class="card"><b>วิเคราะห์ ${best.k} ${best.n} (ตลอดช่วงข้อมูล)</b><div id="c1"></div><div id="c2"></div><div id="c3"></div><div id="c4"></div><div id="c5"></div><div id="c6"></div></div>
+<div class="card"><b>วันในสัปดาห์ (เวลา Asia/Bangkok, ${best.k})</b><div class="w"></div></div>`;
+// fix weekday table properly
+$('#res').querySelector('.card:last-child .w').innerHTML=`<table><tr><th>วัน</th><th>ออเดอร์</th><th>WR</th><th>Net</th><th>PF</th><th>AvgW</th><th>AvgL</th><th>MaxDD</th></tr>${best.wd.map(d=>`<tr><td>${d.name}</td><td>${d.n}</td><td>${f2(d.wr,0)}%</td><td class="${cl(d.net)}">${f2(d.net,3)}</td><td>${f2(d.pf)}</td><td>${f2(d.aw,3)}</td><td>${f2(d.al,3)}</td><td>${f2(d.dd,1)}%</td></tr>`).join('')}</table>`;
+const add=(id,c)=>$(id).append(c),c0=cv(),c1=cv(),c2=cv(),c3=cv(),c4=cv(240),c5=cv(),c6=cv();add('#c5',c5);add('#c6',c6);add('#c0',c0);add('#c1',c1);add('#c2',c2);add('#c3',c3);add('#c4',c4);
+barC(c0,r.out.map(x=>x.k),r.out.map(x=>x.oos.net),x=>f2(x,2));
+lineC(c1,[{y:best.full.e,c:'#f0b90b'}],'Equity (USDT)');lineC(c2,[{y:best.full.dc.map(x=>-x),c:'#ff5d6c'}],'Drawdown %');
+barC(c3,best.wd.map(d=>d.name.slice(0,3)),best.wd.map(d=>d.net),x=>f2(x,2));
+const mk_=[];best.trades.forEach(t=>{mk_.push({i:t.ei,c:'#2ecc8f'},{i:t.xi,c:'#ff5d6c'})});lineC(c4,[{y:D.c,c:'#8b97ab',m:mk_.slice(0,400)}],'ราคา + จุดซื้อ(เขียว)/ขาย(แดง)');
+barC(c5,['Train','Val','OOS'],[best.tr.net,best.va.net,best.oos.net],x=>f2(x,2));barC(c6,best.rg.map(x=>x.name),best.rg.map(x=>x.net),x=>f2(x,2));
+$('#res').insertAdjacentHTML('beforeend',`<div class="card"><b>แยกตามสภาวะตลาด (${best.k}) — Bull: ราคา>EMA200 และ EMA50>EMA200, Bear: ราคา<EMA200 และ EMA50<EMA200, อื่นๆ = Sideways (ใช้ข้อมูลถึงแท่งสัญญาณเท่านั้น)</b><div class="w"><table><tr><th>สภาวะ</th><th>ออเดอร์</th><th>WR</th><th>Net</th><th>PF</th></tr>${best.rg.map(d=>`<tr><td>${d.name}</td><td>${d.n}</td><td>${f2(d.wr,0)}%</td><td class="${cl(d.net)}">${f2(d.net,3)}</td><td>${f2(d.pf)}</td></tr>`).join('')}</table></div><small>การมีกำไรหรือขาดทุนรายวัน/รายสภาวะจากเทรดจำนวนน้อยยังไม่ใช่นัยสำคัญทางสถิติ (ยังไม่ได้ทดสอบ significance)</small></div>`);
+$('#tsel').innerHTML=r.out.map((x,i)=>`<option value="${i}">${x.k} ${x.n}</option>`).join('');th();}
+function th(){const x=R.out[+$('#tsel').value||0];$('#th').innerHTML=`<table><tr><th>#</th><th>เข้า (BKK)</th><th>ออก (BKK)</th><th>ราคาเข้า</th><th>ราคาออก</th><th>กำไร USDT</th><th>%</th><th>เหตุผล</th></tr>${x.trades.map((t,i)=>`<tr><td>${i+1}</td><td>${bk(D.t[t.ei])}</td><td>${bk(D.t[t.xi])}</td><td>${f2(t.entry,3)}</td><td>${f2(t.exit,3)}</td><td class="${cl(t.pnl)}">${f2(t.pnl,4)}</td><td>${f2(t.pct,2)}</td><td>${t.why}</td></tr>`).join('')}</table>`}
+const bk=t=>new Date(t+7*36e5).toISOString().slice(0,16).replace('T',' ');
+$('#tsel').onchange=th;
+// ---------- actions ----------
+async function go(){$('#go').disabled=$('#cmp').disabled=true;$('#msg').textContent='กำลังเริ่ม...';try{await run();$('#msg').textContent='เสร็จแล้ว';$('#src').textContent='แหล่งข้อมูล: '+R.src+' · ดึงเมื่อ '+R.at;ren();tab(1)}catch(e){$('#msg').style.whiteSpace='pre-wrap';$('#msg').textContent='ผิดพลาด: '+e.message}$('#go').disabled=$('#cmp').disabled=false}
+$('#go').onclick=$('#cmp').onclick=go;
+$('#rst').onclick=()=>{D=R=null;$('#sym').value='SOLUSDT';$('#cap').value=10;$('#sz').value=5;$('#tf').value='1h';$('#days').value=365;$('#fee').value='0.10';$('#slp').value='0.05';$('#msg').textContent='';$('#res').innerHTML='';$('#th').innerHTML='';$('#src').textContent=''};
+function save(n,s,m){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([s],{type:m}));a.download=n;a.click()}
+$('#csv').onclick=()=>{if(!R)return;let s='strategy,entry_time_bkk,exit_time_bkk,entry,exit,pnl_usdt,pct,reason\n';R.out.forEach(x=>x.trades.forEach(t=>s+=[x.k,bk(D.t[t.ei]),bk(D.t[t.xi]),t.entry,t.exit,t.pnl,t.pct,t.why].join(',')+'\n'));save('sol-trades.csv',s,'text/csv')};
+$('#plog').onclick=()=>{if(!R)return;save('param-log.csv','strategy,param,sl_atr,tp_atr,hold,trail,train_n,train_wr,train_net,val_n,val_wr,val_net\n'+LOG.map(x=>x.join(',')).join('\n'),'text/csv')};
+$('#dl').onclick=()=>{if(!R)return;save('sol-backtest.json',JSON.stringify({...R,out:R.out.map(({trades,oosT,...x})=>({...x,trades:trades.length}))},(k,v)=>k=='e'||k=='dc'?undefined:v,1),'application/json')};
+// name field for weekday
+// ---------- guide + self-test ----------
+function selfTest(){const P=5,fee=.001,slp=.0005,raw=100,en=raw*(1+slp),q=P/en*(1-fee),ex=101*(1-slp),pnl=q*ex*(1-fee)-P;return 'ตัวอย่างตรวจสอบ: ซื้อ 5 USDT ที่ Open 100 → เข้า '+en.toFixed(4)+', ได้ '+q.toFixed(6)+' SOL; ขายที่ 101 → ออก '+ex.toFixed(4)+', กำไรสุทธิ '+pnl.toFixed(5)+' USDT (หัก fee+slippage ทั้งสองด้าน แล้ว)'}
+$('#guide').innerHTML=`<b>คู่มือใช้งาน</b><ol><li>ตั้งทุน/Timeframe/ช่วงเวลา แล้วกด Start Backtest (ต้องออนไลน์ ระบบดึงแท่งเทียนจริงจาก Binance Spot ไม่ต้องมี API Key)</li><li>ดูหน้า ผลลัพธ์: ตารางเทียบ 6 กลยุทธ์บน Out-of-sample, คำแนะนำ, กราฟ, วันในสัปดาห์ (เวลาไทย)</li><li>Trade History ดูทุกออเดอร์ ส่งออก CSV / JSON ได้</li></ol>
+<b>กฎซื้อ (สัญญาณเมื่อแท่งปิด → เข้าที่ Open แท่งถัดไป)</b><ul><li><b>A Trend Pullback</b>: EMA50>EMA200, ราคา>EMA200, ราคากลับขึ้นเหนือ EMA20 จากด้านล่าง, ADX≥ค่าที่ทดสอบ, RSI 45–70</li><li><b>B RSI Reversion</b>: RSI แท่งก่อน<ค่า oversold และ RSI เด้งขึ้น, ราคาแท่งก่อนต่ำกว่า BB ล่าง(1.5σ), แท่งเขียว, ADX<25 (Sideways)</li><li><b>C BB Reversal</b>: ปิดต่ำกว่าแถบล่างแล้วกลับเข้ากรอบ, RSI เด้ง, Volume>ค่าเฉลี่ย 20</li><li><b>D Supertrend(10,3)</b>: พลิกเป็นขาขึ้น, ราคา>EMA200, RSI>ค่า</li><li><b>E MACD</b>: Histogram ข้ามเป็นบวก, EMA50>EMA200, ราคา>EMA50, Volume>ค่าเฉลี่ย×ค่า</li><li><b>F Donchian</b>: ปิดสูงกว่า High สูงสุด N แท่งก่อนหน้า, ราคา>EMA200, Volume>1.2×ค่าเฉลี่ย</li><li><b>G</b> EMA200+EMA20>50+RSI ตัดขึ้น+ADX≥20 · <b>H</b> เหนือ EMA200, RSI ฟื้น, Volume ยืนยัน, ไม่ไล่ราคา(<EMA20×1.03) · <b>I</b> Supertrend พลิกขึ้น+ADX+Volume · <b>J</b> A + BTC เหนือ EMA200 และ EMA50>EMA200 (จับเวลาแท่งตรงกัน) · <b>K</b> EMA20>50>200 ย่อกลับ + ATR Stop และ Trailing Stop · <b>L</b> ย่อเข้าโซน Fib 0.5–0.618 (Pivot ที่ยืนยันแล้ว)+RSI · <b>M</b> ปิดกลับเหนือ VAL+Volume · <b>N</b> Fib + (VAL หรือใกล้ POC) · <b>O</b> N + RSI+ADX+Volume</ul>
+<b>กฎขาย</b>: Stop Loss / Take Profit ตาม ATR (ทดสอบหลายค่า), ออกตามเวลา (20 หรือ 60 แท่ง) แท่งเดียวชนทั้ง SL และ TP = นับ SL ก่อน, Gap ทะลุ SL = ขายที่ราคาเปิด (เสียเปรียบ)
+<p><b>กันการ Overfit</b>: ปรับพารามิเตอร์เฉพาะ Train 60% เลือกด้วย Validation 20% แล้ววัดผลจริงที่ Out-of-sample 20% ครั้งเดียว + ทดสอบ Fee/Slippage ×2. เกณฑ์ผ่าน: Net>0, PF>1.5, Expectancy>0, MaxDD≤10% ของทุน, เทรด≥100, OOS ไม่พังเมื่อเทียบ Train. ถ้าไม่ผ่าน = WAIT / NO TRADE</p>
+<p><small>${selfTest()}</small></p><p><small>ข้อจำกัด: เป็นการจำลองย้อนหลัง ไม่รับรองกำไรในอนาคต ไม่ใช่คำแนะนำการลงทุน ขนาดออเดอร์คงที่ (ไม่ทบต้น) ไม่มี Martingale</small></p>`;
+</script></body></html>
